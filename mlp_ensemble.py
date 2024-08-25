@@ -54,7 +54,7 @@ def get_model(inputs, outputs):
     # Print a summary of the model architecture
     return model
 
-def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, columns = ['s', 'b', 'h', 'mag_h', 'mag_s', 'mag_b', 'driving_stress'], bad_r2_score = 0.5, start_number = 0, variable_type = 'static'):
+def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, columns = ['s', 'b', 'h', 'mag_h', 'mag_s', 'mag_b', 'driving_stress'], bad_r2_score = 0.5, start_number = 0, variable_type = 'static', folder_name = 'mlp_ensemble'):
     df_pig = process_csv('regularized_const_01C_simultaneous_pig_r1_geo.csv')
     df_thwaites = process_csv('regularized_const_01C_simultaneous_thwaites_r1_geo.csv')
     df_dotson = process_csv('regularized_const_01C_simultaneous_dotson_r1_geo.csv')
@@ -97,6 +97,7 @@ def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, 
         history = model.fit(X_train, y_train, epochs=epochs, batch_size=128, validation_split=0.1, callbacks=[reduce_lr, early_stopping], shuffle=True)
         y_test_predictions = model.predict(X_test)
         r2 = r2_score(y_test_predictions[:,0], y_test[:,0])
+        r2_adjusted = 1 - (1-r2)*(len(y_test)-1)/(len(y_test)-len(X_test[0])-1)
         mse = mean_squared_error(y_test_predictions[:,0], y_test[:,0])
         if r2 < bad_r2_score:
             print('Model', i, 'has a bad R2 test score of', r2, ' and will not be saved')
@@ -104,13 +105,13 @@ def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, 
         else:
             history_list.append(history) #, sample_weight = condition_array)
             model_list.append(model)
-            save_mlp_model(input_columns, model, input_scaler, output_scaler, history, start_number + good_models, r2, mse, variable_type, variable)
+            save_mlp_model(input_columns, model, input_scaler, output_scaler, history, start_number + good_models, r2, r2_adjusted, mse, variable_type, variable, folder_name=folder_name)
             good_models = good_models + 1
         
     print('Number of bad models:', bad_models)
     return model_list, input_scaler, output_scaler, history_list
 
-def save_mlp_model(input_columns, model, input_scaler, output_scaler, history, save_number, r2, mse, variable_type, variable = 'C'):
+def save_mlp_model(input_columns, model, input_scaler, output_scaler, history, save_number, r2, r2_adjusted, mse, variable_type, variable = 'C', folder_name = 'mlp_ensemble'):
     name = 'model_' + str(len(input_columns)) + '_' + 'dotson2_thwaites1_r1_geo' + '_' + variable_type + '_' + variable
 
     # Bundle all components into a dictionary
@@ -122,15 +123,36 @@ def save_mlp_model(input_columns, model, input_scaler, output_scaler, history, s
         'input_columns': input_columns,
         'output_columns': variable,
         'r2_test': r2,
+        'r2_adjusted_test': r2_adjusted,
         'mse_test': mse,
         'history_list': history
     }
 
     # Save the bundle to a single file
     #name = 'model_' + str(len(input_columns)) + '_' + 'split2+'+ '_' +predict_variable[0]
-    with open('mlp_ensemble/'+name + '_' + str(save_number) + '.pkl', "wb") as f:
+    if not os.path.exists(folder_name):
+        os.makedirs(folder_name)
+    name_pkl = name + '_' + str(save_number) + '.pkl'
+    name_h5 = name + '_' + str(save_number) + '.h5'
+
+    with open(os.path.join(folder_name, name_pkl), "wb") as f:
         pickle.dump(model_bundle, f)
-    model.save('mlp_ensemble/'+name+ '_' + str(save_number) + '.h5')
+    model.save(os.path.join(folder_name, name_h5))
+
+def loop_train_ensemble_mlp_model(list_columns , epochs = 1, variable = 'C', number_of_models = 10, bad_r2_score = -500, start_number = 0, variable_type = 'mixed'):
+    model_list = []
+    input_scaler_list = []
+    output_scaler_list = []
+    history_list = []
+    for i, columns in enumerate(list_columns):
+        folder_name = os.path.join('mlp_ensemble', str(i))
+        model, input_scaler, output_scaler, history = train_ensemble_mlp_model(epochs = epochs, variable = variable, number_of_models = number_of_models, columns = columns, bad_r2_score = bad_r2_score, start_number = start_number, variable_type = variable_type, folder_name = folder_name)
+        model_list.append(model)
+        input_scaler_list.append(input_scaler)
+        output_scaler_list.append(output_scaler)
+        history_list.append(history)
+    return model_list, input_scaler_list, output_scaler_list, history_list
+
 
 def load_ensemble_mlp_model(input_columns, number_of_models = 10, variable = 'C', starting_number = 0):
     name = 'model_' + str(len(input_columns)) + '_' + 'dotson_thwaites_r1_geo'+ '_' +variable

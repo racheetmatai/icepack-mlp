@@ -55,9 +55,9 @@ def get_model(inputs, outputs):
     return model
 
 def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, columns = ['s', 'b', 'h', 'mag_h', 'mag_s', 'mag_b', 'driving_stress'], bad_r2_score = 0.5, start_number = 0, variable_type = 'static', folder_name = 'mlp_ensemble'):
-    df_pig = process_csv('regularized_const_01C_simultaneous_pig_r1_geo.csv')
-    df_thwaites = process_csv('regularized_const_01C_simultaneous_thwaites_r1_geo.csv')
-    df_dotson = process_csv('regularized_const_01C_simultaneous_dotson_r1_geo.csv')
+    df_pig = process_csv('regularized_const_01C_simultaneous_pig_r1_geo_12.csv')
+    df_thwaites = process_csv('regularized_const_01C_simultaneous_thwaites_r1_geo_12.csv')
+    df_dotson = process_csv('regularized_const_01C_simultaneous_dotson_r1_geo_12.csv')
 
     df = pd.concat([df_dotson,df_dotson,df_thwaites], ignore_index=True)
 
@@ -85,6 +85,9 @@ def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, 
     model_list = []
     bad_models = 0
     good_models = 0
+    r2_score_list = []
+    r2_adjusted_list = []
+    mse_list = []
     for i in range(number_of_models):
         X_train, X_test, y_train, y_test = train_test_split(inputs_scaled, outputs_scaled, test_size=0.1, random_state=42)
         model = get_model(inputs, outputs)
@@ -99,6 +102,9 @@ def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, 
         r2 = r2_score(y_test_predictions[:,0], y_test[:,0])
         r2_adjusted = 1 - (1-r2)*(len(y_test)-1)/(len(y_test)-len(X_test[0])-1)
         mse = mean_squared_error(y_test_predictions[:,0], y_test[:,0])
+        r2_score_list.append(r2)
+        r2_adjusted_list.append(r2_adjusted)
+        mse_list.append(mse)
         if r2 < bad_r2_score:
             print('Model', i, 'has a bad R2 test score of', r2, ' and will not be saved')
             bad_models += 1
@@ -109,7 +115,10 @@ def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, 
             good_models = good_models + 1
         
     print('Number of bad models:', bad_models)
-    return model_list, input_scaler, output_scaler, history_list
+    r2_score_stats = pd.DataFrame(r2_score_list).describe()
+    r2_adjusted_stats = pd.DataFrame(r2_adjusted_list).describe()
+    mse_stats = pd.DataFrame(mse_list).describe()
+    return model_list, input_scaler, output_scaler, history_list, r2_score_list, r2_adjusted_list, mse_list, r2_score_stats, r2_adjusted_stats, mse_stats
 
 def save_mlp_model(input_columns, model, input_scaler, output_scaler, history, save_number, r2, r2_adjusted, mse, variable_type, variable = 'C', folder_name = 'mlp_ensemble'):
     name = 'model_' + str(len(input_columns)) + '_' + 'dotson2_thwaites1_r1_geo' + '_' + variable_type + '_' + variable
@@ -125,7 +134,7 @@ def save_mlp_model(input_columns, model, input_scaler, output_scaler, history, s
         'r2_test': r2,
         'r2_adjusted_test': r2_adjusted,
         'mse_test': mse,
-        'history_list': history
+        'history_list': history,
     }
 
     # Save the bundle to a single file
@@ -144,16 +153,39 @@ def loop_train_ensemble_mlp_model(list_columns , epochs = 1, variable = 'C', num
     input_scaler_list = []
     output_scaler_list = []
     history_list = []
+    r2_stats_list = []
+    r2_adjusted_stats_list = []
+    mse_stats_list = []
+    base_folder_name = 'mlp_ensemble'
     for i, columns in enumerate(list_columns):
-        folder_name = os.path.join('mlp_ensemble', str(i))
-        model, input_scaler, output_scaler, history = train_ensemble_mlp_model(epochs = epochs, variable = variable, number_of_models = number_of_models, columns = columns, bad_r2_score = bad_r2_score, start_number = start_number, variable_type = variable_type, folder_name = folder_name)
-        model_list.append(model)
+        folder_name = os.path.join(base_folder_name, str(i))
+        model_ensemble, input_scaler, output_scaler, history_ensemble, r2_score_list, r2_adjusted_list, mse_list, r2_score_stats, r2_adjusted_stats, mse_stats = train_ensemble_mlp_model(epochs = epochs, variable = variable, number_of_models = number_of_models, columns = columns, bad_r2_score = bad_r2_score, start_number = start_number, variable_type = variable_type, folder_name = folder_name)
+        model_list.append(model_ensemble)
         input_scaler_list.append(input_scaler)
         output_scaler_list.append(output_scaler)
-        history_list.append(history)
-    return model_list, input_scaler_list, output_scaler_list, history_list
+        history_list.append(history_ensemble)
+        r2_stats_list.append(r2_score_stats)
+        r2_adjusted_stats_list.append(r2_adjusted_stats)
+        mse_stats_list.append(mse_stats)
 
+    with open(os.path.join(base_folder_name, 'r2_stats_list.pkl'), "wb") as f:
+        pickle.dump(r2_stats_list, f)
 
+    with open(os.path.join(base_folder_name, 'r2_adjusted_stats_list.pkl'), "wb") as f:
+        pickle.dump(r2_adjusted_stats_list, f)
+    
+    with open(os.path.join(base_folder_name, 'mse_stats_list.pkl'), "wb") as f:
+        pickle.dump(mse_stats_list, f)
+
+    df_summary = pd.DataFrame(columns=['input_columns', 'r2_mean', 'r2_std', 'r2_median', 'r2_adjusted_mean', 'r2_adjusted_std', 'r2_adjusted_median', 'mse_mean', 'mse_std', 'mse_median'])
+    for i, columns in enumerate(list_columns):
+        df_summary.loc[i] = [columns, r2_stats_list[i]['mean'], r2_stats_list[i]['std'], r2_stats_list[i]['50%'], r2_adjusted_stats_list[i]['mean'], r2_adjusted_stats_list[i]['std'], r2_adjusted_stats_list[i]['50%'], mse_stats_list[i]['mean'], mse_stats_list[i]['std'], mse_stats_list[i]['50%']]
+
+    df_summary.to_csv(os.path.join(base_folder_name, 'summary.csv'))
+
+    return model_list, input_scaler_list, output_scaler_list, history_list, r2_stats_list, r2_adjusted_stats_list, mse_stats_list, df_summary
+
+# Not updated do not use
 def load_ensemble_mlp_model(input_columns, number_of_models = 10, variable = 'C', starting_number = 0):
     name = 'model_' + str(len(input_columns)) + '_' + 'dotson_thwaites_r1_geo'+ '_' +variable
     model_list = []

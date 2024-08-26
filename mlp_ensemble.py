@@ -179,7 +179,7 @@ def loop_train_ensemble_mlp_model(list_columns , epochs = 1, variable = 'C', num
 
     df_summary = pd.DataFrame(columns=['input_columns', 'r2_mean', 'r2_std', 'r2_median', 'r2_adjusted_mean', 'r2_adjusted_std', 'r2_adjusted_median', 'mse_mean', 'mse_std', 'mse_median'])
     for i, columns in enumerate(list_columns):
-        df_summary.loc[i] = [columns, r2_stats_list[i]['mean'], r2_stats_list[i]['std'], r2_stats_list[i]['50%'], r2_adjusted_stats_list[i]['mean'], r2_adjusted_stats_list[i]['std'], r2_adjusted_stats_list[i]['50%'], mse_stats_list[i]['mean'], mse_stats_list[i]['std'], mse_stats_list[i]['50%']]
+        df_summary.loc[i] = [columns, r2_stats_list[i].loc['mean'].values[0], r2_stats_list[i].loc['std'].values[0], r2_stats_list[i].loc['50%'].values[0], r2_adjusted_stats_list[i].loc['mean'].values[0], r2_adjusted_stats_list[i].loc['std'].values[0], r2_adjusted_stats_list[i].loc['50%'].values[0], mse_stats_list[i].loc['mean'].values[0], mse_stats_list[i].loc['std'].values[0], mse_stats_list[i].loc['50%'].values[0]]
 
     df_summary.to_csv(os.path.join(base_folder_name, 'summary.csv'))
 

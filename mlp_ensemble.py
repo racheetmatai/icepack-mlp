@@ -158,7 +158,7 @@ def loop_train_ensemble_mlp_model(list_columns , epochs = 1, variable = 'C', num
     mse_stats_list = []
     base_folder_name = 'mlp_ensemble'
     for i, columns in enumerate(list_columns):
-        folder_name = os.path.join(base_folder_name, str(i))
+        folder_name = os.path.join(base_folder_name, str(hash(tuple(columns))))
         model_ensemble, input_scaler, output_scaler, history_ensemble, r2_score_list, r2_adjusted_list, mse_list, r2_score_stats, r2_adjusted_stats, mse_stats = train_ensemble_mlp_model(epochs = epochs, variable = variable, number_of_models = number_of_models, columns = columns, bad_r2_score = bad_r2_score, start_number = start_number, variable_type = variable_type, folder_name = folder_name)
         model_list.append(model_ensemble)
         input_scaler_list.append(input_scaler)

@@ -181,7 +181,8 @@ def loop_train_ensemble_mlp_model(list_columns , epochs = 1, variable = 'C', num
     for i, columns in enumerate(list_columns):
         df_summary.loc[i] = [columns, r2_stats_list[i].loc['mean'].values[0], r2_stats_list[i].loc['std'].values[0], r2_stats_list[i].loc['50%'].values[0], r2_adjusted_stats_list[i].loc['mean'].values[0], r2_adjusted_stats_list[i].loc['std'].values[0], r2_adjusted_stats_list[i].loc['50%'].values[0], mse_stats_list[i].loc['mean'].values[0], mse_stats_list[i].loc['std'].values[0], mse_stats_list[i].loc['50%'].values[0]]
 
-    df_summary.to_csv(os.path.join(base_folder_name, 'summary.csv'))
+    summary_name = 'summary_' + str(random.randint(0, 9999)) + '.csv'
+    df_summary.to_csv(os.path.join(base_folder_name, summary_name))
 
     return model_list, input_scaler_list, output_scaler_list, history_list, r2_stats_list, r2_adjusted_stats_list, mse_stats_list, df_summary
 

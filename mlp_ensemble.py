@@ -186,6 +186,68 @@ def loop_train_ensemble_mlp_model(list_columns , epochs = 1, variable = 'C', num
 
     return model_list, input_scaler_list, output_scaler_list, history_list, r2_stats_list, r2_adjusted_stats_list, mse_stats_list, df_summary
 
+def get_model_summary(base_folder='mlp_ensemble'):
+    summary_list = []
+    
+    for folder in os.listdir(base_folder):
+        try:
+            folder_num = int(folder)
+        except ValueError:
+            continue  # Skip non-numeric folder names
+        
+        if os.path.isdir(os.path.join(base_folder, folder)):
+            print('Processing folder:', folder)
+            path = os.path.join(base_folder, folder)
+            files = [f for f in os.listdir(path) if f.endswith('.pkl')]
+            
+            if not files:
+                print(f"No .pkl files found in folder {folder}. Skipping.")
+                continue
+            
+            r2_list, r2_adjusted_list, mse_list = [], [], []
+            columns = None
+
+            for file in files:
+                try:
+                    with open(os.path.join(path, file), "rb") as f:
+                        model_bundle = pickle.load(f)
+                        r2_list.append(model_bundle['r2_test'])
+                        r2_adjusted_list.append(model_bundle['r2_adjusted_test'])
+                        mse_list.append(model_bundle['mse_test'])
+                        columns = model_bundle.get('input_columns', columns)
+                except Exception as e:
+                    print(f"Error processing file {file} in folder {folder}: {e}")
+                    continue
+
+            if r2_list and r2_adjusted_list and mse_list:
+                r2_stats = pd.DataFrame(r2_list).describe()
+                r2_adjusted_stats = pd.DataFrame(r2_adjusted_list).describe()
+                mse_stats = pd.DataFrame(mse_list).describe()
+                
+                summary_list.append({
+                    'input_columns': columns,
+                    'r2_mean': r2_stats.loc['mean'].values[0],
+                    'r2_std': r2_stats.loc['std'].values[0],
+                    'r2_median': r2_stats.loc['50%'].values[0],
+                    'r2_adjusted_mean': r2_adjusted_stats.loc['mean'].values[0],
+                    'r2_adjusted_std': r2_adjusted_stats.loc['std'].values[0],
+                    'r2_adjusted_median': r2_adjusted_stats.loc['50%'].values[0],
+                    'mse_mean': mse_stats.loc['mean'].values[0],
+                    'mse_std': mse_stats.loc['std'].values[0],
+                    'mse_median': mse_stats.loc['50%'].values[0]
+                })
+    
+    df_summary = pd.DataFrame(summary_list)
+    if not df_summary.empty:
+        summary_name = f'summary_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        df_summary.to_csv(os.path.join(base_folder, summary_name), index=False)
+        print(f'Summary saved as {summary_name}')
+    else:
+        print('No data to summarize.')
+    
+    return df_summary
+
+
 # Not updated do not use
 def load_ensemble_mlp_model(input_columns, number_of_models = 10, variable = 'C', starting_number = 0):
     name = 'model_' + str(len(input_columns)) + '_' + 'dotson_thwaites_r1_geo'+ '_' +variable

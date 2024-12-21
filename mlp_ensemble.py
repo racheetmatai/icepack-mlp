@@ -6,7 +6,7 @@ import random
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from keras.models import Sequential
-from keras.layers import Dense, Dropout
+from keras.layers import Dense, Dropout, BatchNormalization, Activation
 from keras.callbacks import ReduceLROnPlateau, EarlyStopping
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -22,65 +22,108 @@ from sklearn.model_selection import train_test_split
 import xarray as xr
 from datetime import datetime
 
+def get_phi(h, s):
+    g = 9769603575225600.0
+    ρ_I = 9.207917118369125e-19
+    ρ_W = 1.0282341471330407e-18
+
+    p_W = ρ_W * g * np.maximum(0, h - s)
+    p_I = ρ_I * g * h
+
+    # Avoid division by zero with a safe divide
+    phi = np.where(p_I > 0, np.maximum((1 - p_W / p_I), 0), 0)
+    return phi
+
 def process_csv(filename):
     df = pd.read_csv(filename, index_col=0)
     df = df.sample(frac=1).reset_index(drop=True)
     df['vel_mag'] = np.sqrt(df['x_velocity']**2 + df['y_velocity']**2)
     df['driving_stress'] = df['h'] * 9.8 * df['mag_s']
+    df['phi'] = get_phi(df['h'].to_numpy(), df['s'].to_numpy())
     return df
 
 def get_model(inputs, outputs):
     # Assuming you want to predict a single continuous output
     input_dim = inputs.shape[1]
     number_of_layers = 10
-    neurons =200
-    a_fcn = 'silu'
+    neurons = 200
+    a_fcn = 'silu'  # Activation function
+    
     # Create a Sequential model
     model = Sequential()
 
     # Add the input layer and the first hidden layer
-    model.add(Dense(units=neurons, activation=a_fcn, input_dim=input_dim))
+    model.add(Dense(units=neurons, input_dim=input_dim, activation=None))
+    model.add(BatchNormalization())  # Normalize inputs to the activation function
+    model.add(Activation(a_fcn))    # Apply activation function separately
 
-    for i in range(number_of_layers-1):
-        model.add(Dense(units=neurons, activation=a_fcn))
-        #model.add(Dropout(0.2))
+    # Add the remaining hidden layers with BatchNormalization
+    for i in range(number_of_layers - 1):
+        model.add(Dense(units=neurons, activation=None))
+        model.add(BatchNormalization())
+        model.add(Activation(a_fcn))
 
     # Add the output layer for regression
-    model.add(Dense(units=outputs.shape[1])) #, activation='None'))
+    model.add(Dense(units=outputs.shape[1]))  # Linear activation for regression
 
     # Compile the model with Mean Squared Error loss for regression
-    #opt = tf.keras.optimizers.Adam(learning_rate=0.001)
-    model.compile(optimizer='adam', loss='mean_squared_error') #, weighted_metrics=['mean_squared_error']) # check this weighted_metrics
+    model.compile(optimizer='adam', loss='mean_squared_error')
 
-    # Print a summary of the model architecture
+    # Return the model
     return model
 
-def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, columns = ['s', 'b', 'h', 'mag_h', 'mag_s', 'mag_b', 'driving_stress'], bad_r2_score = 0.5, start_number = 0, variable_type = 'static', folder_name = 'mlp_ensemble'):
-    df_pig = process_csv('regularized_const_01C_simultaneous_pig_r1_geo_12.csv')
-    df_thwaites = process_csv('regularized_const_01C_simultaneous_thwaites_r1_geo_12.csv')
-    df_dotson = process_csv('regularized_const_01C_simultaneous_dotson_r1_geo_12.csv')
+def train_ensemble_mlp_model(select_dataset=1, epochs=1, variable='C', number_of_models=10, 
+                             columns=['s', 'b', 'h', 'mag_h', 'mag_s', 'mag_b', 'driving_stress'], 
+                             bad_r2_score=0.5, bad_mse_score=1e-2, start_number=0, 
+                             variable_type='static', folder_name='mlp_ensemble'):
+    df_pig = process_csv('regularized_const_01C_C_only_englacial_temp_pig_r005_geo_12.csv')
+    df_thwaites = process_csv('regularized_const_01C_C_only_englacial_temp_thwaites_r005_geo_12.csv')
+    df_dotson = process_csv('regularized_const_01C_C_only_englacial_temp_dotson_r005_geo_12.csv')
 
-    df = pd.concat([df_dotson,df_dotson,df_thwaites], ignore_index=True)
+    # Define datasets and weights based on selection
+    datasets = []
+    weights = []
+    if select_dataset == 0:
+        datasets = [df_dotson, df_thwaites]
+        weights = [2, 1]
+        print("dataset selected: [df_dotson (weight=2), df_thwaites (weight=1)]")
+        model_name = 'dotson2_thwaites1_r01_geo'
+    elif select_dataset == 1:
+        datasets = [df_pig, df_thwaites]
+        weights = [2, 1]
+        print("dataset selected: [df_pig (weight=2), df_thwaites (weight=1)]")
+        model_name = 'pig2_thwaites1_r01_geo'
+    elif select_dataset == 2:
+        datasets = [df_dotson, df_pig]
+        weights = [1, 1]
+        print("dataset selected: [df_dotson (weight=1), df_pig (weight=1)]")
+        model_name = 'dotson_pig_r01_geo'
+    elif select_dataset == 3:
+        datasets = [df_dotson]
+        weights = [1]
+        print("dataset selected: [df_dotson (weight=1)]")
+        model_name = 'dotson_r01_geo'
+    elif select_dataset == 4:
+        datasets = [df_pig]
+        weights = [1]
+        print("dataset selected: [df_pig (weight=1)]")
+        model_name = 'pig_r01_geo'
+    elif select_dataset == 5:
+        datasets = [df_thwaites]
+        weights = [1]
+        print("dataset selected: [df_thwaites (weight=1)]")
+        model_name = 'thwaites_r01_geo'
 
-    predict_variable = [variable]
-    input_columns =  columns 
-    inputs = df[input_columns].to_numpy()
-    outputs = df[predict_variable].to_numpy()#.reshape(-1,1)
+    # Combine datasets with weights
+    df = pd.concat(datasets, ignore_index=True)
+    value = 0.1  # Replace this with your desired threshold value
+    df = df[df['phi'] > value].reset_index(drop=True)  # Filter rows where 'phi' is greater than the threshold
+    sample_weights = np.concatenate([
+        np.ones(len(d[d['phi'] > value])) * w for d, w in zip(datasets, weights)
+    ])
 
-    if np.isnan(inputs).any():
-        raise ValueError("There are NaNs in the inputs")
-    if np.isinf(inputs).any():
-        raise ValueError("There are Infs in the inputs")
-    if np.isnan(outputs).any():
-        raise ValueError("There are NaNs in the outputs")
-    if np.isinf(outputs).any():
-        raise ValueError("There are Infs in the outputs")
-    
-    input_scaler = MinMaxScaler()
-    output_scaler = MinMaxScaler() 
-
-    inputs_scaled = input_scaler.fit_transform(inputs)
-    outputs_scaled = output_scaler.fit_transform(outputs)
+    if len(df) != len(sample_weights):
+        raise ValueError("Mismatch between filtered data and sample weights after filtering by 'phi'.")
 
     history_list = []
     model_list = []
@@ -89,40 +132,75 @@ def train_ensemble_mlp_model(epochs = 1, variable = 'C', number_of_models = 10, 
     r2_score_list = []
     r2_adjusted_list = []
     mse_list = []
+
     for i in range(number_of_models):
-        X_train, X_test, y_train, y_test = train_test_split(inputs_scaled, outputs_scaled, test_size=0.1, random_state=42)
+        # Shuffle data and weights together
+        shuffled_indices = np.random.permutation(len(df))
+        df_shuffled = df.iloc[shuffled_indices].reset_index(drop=True)
+        sample_weights_shuffled = sample_weights[shuffled_indices]
+
+        # Prepare inputs and outputs
+        predict_variable = [variable]
+        input_columns = columns
+        inputs = df_shuffled[input_columns].to_numpy()
+        outputs = df_shuffled[predict_variable].to_numpy()
+
+        if np.isnan(inputs).any() or np.isnan(outputs).any():
+            raise ValueError("There are NaNs in the inputs or outputs.")
+        if np.isinf(inputs).any() or np.isinf(outputs).any():
+            raise ValueError("There are Infs in the inputs or outputs.")
+
+        # Scale inputs and outputs
+        input_scaler = MinMaxScaler()
+        output_scaler = MinMaxScaler()
+        inputs_scaled = input_scaler.fit_transform(inputs)
+        outputs_scaled = output_scaler.fit_transform(outputs)
+
+        # Split data into training and testing sets
+        X_train, X_test, y_train, y_test, sw_train, sw_test = train_test_split(
+            inputs_scaled, outputs_scaled, sample_weights_shuffled, test_size=0.1, random_state=42
+        )
+
+        # Create and train the model
         model = get_model(inputs, outputs)
-        reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2,
-                                patience=40, min_lr=0.00001) # 40
+        reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=100, min_lr=0.00001)
         early_stopping = EarlyStopping(
-            monitor='val_loss',
-            patience=100, #100
-            restore_best_weights=True)
-        history = model.fit(X_train, y_train, epochs=epochs, batch_size=128, validation_split=0.1, callbacks=[reduce_lr, early_stopping], shuffle=True)
+            monitor='val_loss', patience=150, restore_best_weights=True)
+
+        history = model.fit(
+            X_train, y_train, sample_weight=sw_train, epochs=epochs, batch_size=128,
+            validation_split=0.1, callbacks=[reduce_lr, early_stopping], shuffle=True
+        )
+
+        # Evaluate the model
         y_test_predictions = model.predict(X_test)
-        r2 = r2_score(y_test_predictions[:,0], y_test[:,0])
-        r2_adjusted = 1 - (1-r2)*(len(y_test)-1)/(len(y_test)-len(X_test[0])-1)
-        mse = mean_squared_error(y_test_predictions[:,0], y_test[:,0])
-        r2_score_list.append(r2)
-        r2_adjusted_list.append(r2_adjusted)
-        mse_list.append(mse)
-        if r2 < bad_r2_score:
-            print('Model', i, 'has a bad R2 test score of', r2, ' and will not be saved')
+        r2 = r2_score(y_test_predictions[:, 0], y_test[:, 0])
+        r2_adjusted = 1 - (1 - r2) * (len(y_test) - 1) / (len(y_test) - len(X_test[0]) - 1)
+        mse = mean_squared_error(y_test_predictions[:, 0], y_test[:, 0])
+
+        # Save or discard the model based on performance
+        if r2 < bad_r2_score or mse > bad_mse_score:
+            print('Model', i, 'has a bad R2/mse test score of R2:', r2, 'MSE', mse, ' and will not be saved')
             bad_models += 1
         else:
-            history_list.append(history) #, sample_weight = condition_array)
+            history_list.append(history)
             model_list.append(model)
-            save_mlp_model(input_columns, model, input_scaler, output_scaler, history, start_number + good_models, r2, r2_adjusted, mse, variable_type, variable, folder_name=folder_name)
-            good_models = good_models + 1
-        
+            save_mlp_model(input_columns, model, input_scaler, output_scaler, history, 
+                           start_number + good_models, r2, r2_adjusted, mse, variable_type, 
+                           variable, folder_name=folder_name, model_name=model_name)
+            good_models += 1
+
+    # Print summary statistics
     print('Number of bad models:', bad_models)
     r2_score_stats = pd.DataFrame(r2_score_list).describe()
     r2_adjusted_stats = pd.DataFrame(r2_adjusted_list).describe()
     mse_stats = pd.DataFrame(mse_list).describe()
     return model_list, input_scaler, output_scaler, history_list, r2_score_list, r2_adjusted_list, mse_list, r2_score_stats, r2_adjusted_stats, mse_stats
 
-def save_mlp_model(input_columns, model, input_scaler, output_scaler, history, save_number, r2, r2_adjusted, mse, variable_type, variable = 'C', folder_name = 'mlp_ensemble'):
-    name = 'model_' + str(len(input_columns)) + '_' + 'dotson2_thwaites1_r1_geo' + '_' + variable_type + '_' + variable
+
+
+def save_mlp_model(input_columns, model, input_scaler, output_scaler, history, save_number, r2, r2_adjusted, mse, variable_type, variable = 'C', folder_name = 'mlp_ensemble', model_name = 'dotson2_thwaites1_r1_geo'):
+    name = 'model_' + str(len(input_columns)) + '_' + model_name + '_' + variable_type + '_' + variable
 
     # Bundle all components into a dictionary
     model_bundle = {
@@ -149,7 +227,8 @@ def save_mlp_model(input_columns, model, input_scaler, output_scaler, history, s
         pickle.dump(model_bundle, f)
     model.save(os.path.join(folder_name, name_h5))
 
-def loop_train_ensemble_mlp_model(list_columns , epochs = 1, variable = 'C', number_of_models = 10, bad_r2_score = -500, start_number = 0, variable_type = 'mixed'):
+def loop_train_ensemble_mlp_model(list_columns , select_dataset = 1, epochs = 1, variable = 'C', number_of_models = 10, bad_r2_score = -500, start_number = 0, variable_type = 'mixed',base_folder_name = 'mlp_ensemble'):
+    base_folder_name = base_folder_name + '_' + str(select_dataset)
     model_list = []
     input_scaler_list = []
     output_scaler_list = []
@@ -157,10 +236,9 @@ def loop_train_ensemble_mlp_model(list_columns , epochs = 1, variable = 'C', num
     r2_stats_list = []
     r2_adjusted_stats_list = []
     mse_stats_list = []
-    base_folder_name = 'mlp_ensemble'
     for i, columns in enumerate(list_columns):
         folder_name = os.path.join(base_folder_name, str(hash(tuple(columns))))
-        model_ensemble, input_scaler, output_scaler, history_ensemble, r2_score_list, r2_adjusted_list, mse_list, r2_score_stats, r2_adjusted_stats, mse_stats = train_ensemble_mlp_model(epochs = epochs, variable = variable, number_of_models = number_of_models, columns = columns, bad_r2_score = bad_r2_score, start_number = start_number, variable_type = variable_type, folder_name = folder_name)
+        model_ensemble, input_scaler, output_scaler, history_ensemble, r2_score_list, r2_adjusted_list, mse_list, r2_score_stats, r2_adjusted_stats, mse_stats = train_ensemble_mlp_model(select_dataset = select_dataset, epochs = epochs, variable = variable, number_of_models = number_of_models, columns = columns, bad_r2_score = bad_r2_score, start_number = start_number, variable_type = variable_type, folder_name = folder_name)
         model_list.append(model_ensemble)
         input_scaler_list.append(input_scaler)
         output_scaler_list.append(output_scaler)
@@ -207,8 +285,9 @@ def get_model_summary(base_folder='mlp_ensemble'):
             
             r2_list, r2_adjusted_list, mse_list = [], [], []
             columns = None
-
+            number_of_models = 0 
             for file in files:
+                
                 try:
                     with open(os.path.join(path, file), "rb") as f:
                         model_bundle = pickle.load(f)
@@ -216,6 +295,7 @@ def get_model_summary(base_folder='mlp_ensemble'):
                         r2_adjusted_list.append(model_bundle['r2_adjusted_test'])
                         mse_list.append(model_bundle['mse_test'])
                         columns = model_bundle.get('input_columns', columns)
+                        number_of_models = number_of_models + 1
                 except Exception as e:
                     print(f"Error processing file {file} in folder {folder}: {e}")
                     continue
@@ -226,6 +306,7 @@ def get_model_summary(base_folder='mlp_ensemble'):
                 mse_stats = pd.DataFrame(mse_list).describe()
                 
                 summary_list.append({
+                    'folder_name':folder_num,
                     'input_columns': columns,
                     'r2_mean': r2_stats.loc['mean'].values[0],
                     'r2_std': r2_stats.loc['std'].values[0],
@@ -235,9 +316,10 @@ def get_model_summary(base_folder='mlp_ensemble'):
                     'r2_adjusted_median': r2_adjusted_stats.loc['50%'].values[0],
                     'mse_mean': mse_stats.loc['mean'].values[0],
                     'mse_std': mse_stats.loc['std'].values[0],
-                    'mse_median': mse_stats.loc['50%'].values[0]
+                    'mse_median': mse_stats.loc['50%'].values[0],
+                    'number_of_models':number_of_models,
                 })
-    
+                
     df_summary = pd.DataFrame(summary_list)
     if not df_summary.empty:
         summary_name = f'summary_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
@@ -247,8 +329,7 @@ def get_model_summary(base_folder='mlp_ensemble'):
         print('No data to summarize.')
     
     return df_summary
-
-
+    
 # Not updated do not use
 def load_ensemble_mlp_model(input_columns, number_of_models = 10, variable = 'C', starting_number = 0):
     name = 'model_' + str(len(input_columns)) + '_' + 'dotson_thwaites_r1_geo'+ '_' +variable
